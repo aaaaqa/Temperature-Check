@@ -1,6 +1,6 @@
 #include <esp_now.h>
 #include <WiFi.h>
-#include <max6675.h>
+#include <max31856.h>
 #include <ESP32Ping.h>
 
 #define PIN_ANALOGICO 34
@@ -10,8 +10,8 @@
 #define VOLTAJE_BATERIA_MIN 3.5
 #define DIVISOR_RESISTENCIA 1.97
 
-int SO = 14, CS = 15, CSK = 12;
-MAX6675 termocupla(CSK, CS, SO);
+int CS = 14, MOSI = 15, SO = 12, CLK = 11;
+MAX31856 termocupla(CS, MOSI, SO, CLK);
 
 const uint8_t esp2Address[] = {0x08, 0xD1, 0xF9, 0xDC, 0xDC, 0xBC};
 constexpr int buttonPin = 2, ledR = 23, ledG = 21, ledB = 22, numMeasurements = 10;
@@ -55,6 +55,7 @@ void setup()
   
   esp_sleep_enable_ext0_wakeup((gpio_num_t)buttonPin, 1);
   Serial.begin(115200);
+  termocupla.begin();
   analogReadResolution(12);
 
   WiFi.mode(WIFI_STA);
@@ -78,6 +79,8 @@ void setup()
   checkConnection();
   //WiFi.disconnect();
   WiFi.mode(WIFI_OFF);
+
+  termocupla.setThermocoupleType(MAX31856_TCTYPE_K);
 }
 
 void setRGBColor(int red, int green, int blue) 
@@ -100,7 +103,7 @@ void setRGBColorSequence(int red, int green, int blue, int repetitions)
 
 float getThermocoupleMeasure() 
 {
-  return termocupla.readCelsius();
+  return termocupla.readThermocoupleTemperature();
 }
 
 float calculateBattery(bool V)
