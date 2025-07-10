@@ -1,20 +1,20 @@
 #include <esp_now.h>
 #include <WiFi.h>
-#include <max31856.h>
+#include <Adafruit_MAX31856.h>
 #include <ESP32Ping.h>
 
-#define PIN_ANALOGICO 34
+#define PIN_ANALOGICO 2
 #define VOLTAJE_MAX 3.3
 #define VOLTAJE_MIN 0.0
 #define VOLTAJE_BATERIA_MAX 6.5
 #define VOLTAJE_BATERIA_MIN 3.5
 #define DIVISOR_RESISTENCIA 1.97
 
-int CS = 14, MOSI = 15, SO = 12, CLK = 11;
-MAX31856 termocupla(CS, MOSI, SO, CLK);
+int CS_variable = 10, MOSI_variable = 3, SO_variable = 5, CLK_variable = 4;
+Adafruit_MAX31856 termocupla = Adafruit_MAX31856(CS_variable, MOSI_variable, SO_variable, CLK_variable);
 
-const uint8_t esp2Address[] = {0x08, 0xD1, 0xF9, 0xDC, 0xDC, 0xBC};
-constexpr int buttonPin = 2, ledR = 23, ledG = 21, ledB = 22, numMeasurements = 10;
+const uint8_t esp2Address[] = {0x08, 0xD1, 0xF9, 0xDC, 0xDC, 0xBC };
+constexpr int buttonPin = 19, ledR = 0, ledG = 1, ledB = 18, numMeasurements = 10;
 
 bool macSent, buttonPressed, sequenceInProgress, bouncePress, stableTemperature, deepSleep;
 
@@ -24,8 +24,7 @@ int lastButtonPressTime, buttonPressCounter, currentIndex, sendTime, deepSleepTi
 float temperatureReadings[numMeasurements];
 float currentTemperature, averageTemperature;
 
-void initializeVariables()
-{
+void initializeVariables() {
   buttonPressed = false;
   deepSleep = true;
   macSent = false;
@@ -49,11 +48,11 @@ void initializeVariables()
 int tempWIFIOFF = 0;
 int tempWIFION = 0;
 
-void setup()
-{
+void setup() {
   initializeVariables();
-  
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)buttonPin, 1);
+
+  //esp_wake_deep_sleep();
+  esp_deep_sleep_enable_gpio_wakeup((gpio_num_t)buttonPin, ESP_GPIO_WAKEUP_GPIO_LOW);
   Serial.begin(115200);
   termocupla.begin();
   analogReadResolution(12);
@@ -69,8 +68,7 @@ void setup()
 
   Serial.println("Conectado.");
 
-  if (esp_now_init() != ESP_OK) 
-  {
+  if (esp_now_init() != ESP_OK) {
     Serial.println("Error al inicializar ESP-NOW");
     return;
   }
@@ -83,17 +81,14 @@ void setup()
   termocupla.setThermocoupleType(MAX31856_TCTYPE_K);
 }
 
-void setRGBColor(int red, int green, int blue) 
-{
+void setRGBColor(int red, int green, int blue) {
   analogWrite(ledR, red);
   analogWrite(ledG, green);
   analogWrite(ledB, blue);
 }
 
-void setRGBColorSequence(int red, int green, int blue, int repetitions) 
-{
-  for(int i = 0; i < repetitions; i++)
-  {
+void setRGBColorSequence(int red, int green, int blue, int repetitions) {
+  for (int i = 0; i < repetitions; i++) {
     setRGBColor(red, green, blue);
     delay(500);
     setRGBColor(255, 255, 255);
@@ -101,45 +96,40 @@ void setRGBColorSequence(int red, int green, int blue, int repetitions)
   }
 }
 
-float getThermocoupleMeasure() 
-{
+float getThermocoupleMeasure() {
   return termocupla.readThermocoupleTemperature();
 }
 
-float calculateBattery(bool V)
-{
+float calculateBattery(bool V) {
   int lecturaADC = analogRead(PIN_ANALOGICO);
   float voltajePin = (lecturaADC / 4095.0) * VOLTAJE_MAX;
   float voltajeBateria = voltajePin * DIVISOR_RESISTENCIA;
   float porcentaje = ((voltajeBateria - VOLTAJE_BATERIA_MIN) / (VOLTAJE_BATERIA_MAX - VOLTAJE_BATERIA_MIN)) * 100.0;
   porcentaje = constrain(porcentaje, 0, 100);
-  
+
   float result = V ? porcentaje : voltajeBateria;
 
   return result;
 }
 
-bool automaticBatteryCheck()
-{
-  return true;//calculateBattery(false) >= 3.5;
+bool automaticBatteryCheck() {
+  return true;  //calculateBattery(false) >= 3.5;
 }
 
-void manualBatteryCheck()
-{
+void manualBatteryCheck() {
   float porcentaje = calculateBattery(true);
 
-  int red = (porcentaje <= 20.0) ? 0 : int(porcentaje * 255 / 100);
-  int green = 255 - red;
+  float red = (porcentaje <= 20.0) ? 0 : int(porcentaje * 255 / 100);
+  float green = 255.0 - red;
 
   Serial.printf("Bateria actual: %.2f %\n", porcentaje);
   Serial.printf("Red: %.2f, Green: %.2f\n", red, green);
 
-  setRGBColorSequence(red, green, 255, 4);
+  setRGBColorSequence((int)red, (int)green, 255, 4);
 }
 
 
-void checkConnection()
-{
+void checkConnection() {
   esp_now_register_send_cb(onSent);
   esp_now_register_recv_cb(onReceive);
 
@@ -147,82 +137,68 @@ void checkConnection()
   memcpy(peerInfo.peer_addr, esp2Address, 6);
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
-  
-  if (esp_now_add_peer(&peerInfo) != ESP_OK) 
-  {
+
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
     Serial.println("No se pudo agregar el peer");
     return;
   }
 }
 
-void onSent(const uint8_t *mac_addr, esp_now_send_status_t status)
-{
-  if(status == ESP_NOW_SEND_SUCCESS) 
-  {
+void onSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  if (status == ESP_NOW_SEND_SUCCESS) {
     macSent = !macSent;
     Serial.println("Mensaje enviado con éxito");
-    
-    if(!macSent)
-    {
+
+    if (!macSent) {
       Serial.println("Secuencia completada, deteniendo reintentos.");
     }
-  }
-  else 
-  {
+  } else {
     failCounter += 1;
     timeSinceLastFailure = millis();
-    
+
     Serial.println("Error al enviar mensaje");
     setRGBColor(0, 0, 255);
-    
-    if (!macSent) 
-    {
+
+    if (!macSent) {
       Serial.println("Error en el mensaje inicial, secuencia terminada.");
       deepSleepTime = 1000;
     }
   }
 }
 
-void onReceive(const uint8_t *mac_addr, const uint8_t *data, int data_len) 
-{   
-  if (data_len == sizeof(int)) 
-  {
+void onReceive(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
+  if (data_len == sizeof(int)) {
     memcpy(&initialNumber, data, sizeof(initialNumber));
     Serial.print("Número inicial recibido: ");
     Serial.println(initialNumber);
   }
 }
 
-void sendInitialMessage() 
-{
-    uint8_t initialMessage[1] = {0xFF};
-    esp_now_send(esp2Address, initialMessage, sizeof(initialMessage));
-    Serial.println("Mensaje inicial enviado.");
+void sendInitialMessage() {
+  uint8_t initialMessage[1] = { 0xFF };
+  esp_now_send(esp2Address, initialMessage, sizeof(initialMessage));
+  Serial.println("Mensaje inicial enviado.");
 }
 
-void sendTemperatureAndInitial() 
-{
+void sendTemperatureAndInitial() {
   sendTime = millis();
   //currentTemperature = a;  // Mide la temperatura usando el sensor MAX6675
-  float dataToSend[2] = {averageTemperature, (float)initialNumber};
-  
-  while (macSent)
-  {
+  float dataToSend[2] = { averageTemperature, (float)initialNumber };
+
+  while (macSent) {
     esp_now_send(esp2Address, (uint8_t *)dataToSend, sizeof(dataToSend));
-    Serial.printf("Intentando enviar temperatura: %.2f y número inicial: %d\n", currentTemperature, initialNumber);
+    Serial.printf("Intentando enviar temperatura: %.2f y número inicial: %d\n", averageTemperature, initialNumber);
     delay(4000);
   }
 }
 
-bool checkTemperatureStability() 
-{
+bool checkTemperatureStability() {
   float maxTemp = temperatureReadings[0];
   float minTemp = temperatureReadings[0];
 
   averageTemperature = 0;
 
-  for (int i = 1; i < numMeasurements; i++) 
-  {
+  for (int i = 0; i < numMeasurements; i++) {
     maxTemp = (temperatureReadings[i] > maxTemp) ? temperatureReadings[i] : maxTemp;
     minTemp = (temperatureReadings[i] < minTemp) ? temperatureReadings[i] : minTemp;
     averageTemperature += temperatureReadings[i];
@@ -233,30 +209,26 @@ bool checkTemperatureStability()
   return (maxTemp - minTemp) <= 0.5;
 }
 
-void measureSequence()
-{
-  while(!stableTemperature)
-  {
+void measureSequence() {
+  while (!stableTemperature) {
     currentTemperature = getThermocoupleMeasure();
     temperatureReadings[currentIndex] = currentTemperature;
     Serial.println(currentTemperature);
     currentIndex = (currentIndex + 1) % numMeasurements;
     stableTemperature = checkTemperatureStability();
-    delay(1000); 
+    delay(1000);
   }
 
   Serial.println("Temperatura estable, se enviarán los datos:");
 
-  for (int i = 0; i < numMeasurements; i++) 
-  {
+  for (int i = 0; i < numMeasurements; i++) {
     Serial.print(temperatureReadings[i]);
     Serial.print(" ");
   }
   Serial.println();
 }
 
-void sendDeepSleep(int delayTime)
-{
+void sendDeepSleep(int delayTime) {
   Serial.printf("Durmiendo en %d.\n", delayTime);
   WiFi.mode(WIFI_OFF);
   delay(delayTime);
@@ -265,20 +237,14 @@ void sendDeepSleep(int delayTime)
   esp_deep_sleep_start();
 }
 
-void loop()
-{
+void loop() {
 
-  if(digitalRead(buttonPin) == HIGH)
-  {
-    if(deepSleep)
-    {
-      esp_sleep_enable_ext0_wakeup((gpio_num_t)buttonPin, 1);
+  if (digitalRead(buttonPin) == HIGH) {
+    if (deepSleep) {
+      esp_deep_sleep_enable_gpio_wakeup((gpio_num_t)buttonPin, ESP_GPIO_WAKEUP_GPIO_LOW);
       deepSleep = false;
-    }
-    else
-    {
-      if(!buttonPressed)
-      {
+    } else {
+      if (!buttonPressed) {
         sequenceCountdown = millis();
         buttonPressed = true;
       }
@@ -288,36 +254,29 @@ void loop()
       buttonPressCounter = bouncePress ? buttonPressCounter + 1 : buttonPressCounter;
       bouncePress = false;
     }
-  }
-  else
-  {
+  } else {
     bouncePress = (millis() - sequenceCountdown >= 500) ? true : false;
     buttonPressed = false;
   }
 
-  if(buttonPressCounter >= 3)
-  {
+  if (buttonPressCounter >= 3) {
     buttonPressCounter = 0;
     Serial.println("Checking battery...");
     manualBatteryCheck();
   }
 
-  if(millis() - sequenceCountdown >= 3000)
-  {
+  if (millis() - sequenceCountdown >= 3000) {
     buttonPressCounter = 0;
     sequenceCountdown = 0;
-    if(sequenceInProgress)
-    {
-      if(automaticBatteryCheck())
-      {
+    if (sequenceInProgress) {
+      if (automaticBatteryCheck()) {
         WiFi.mode(WIFI_STA);
         esp_now_init();
         checkConnection();
         WiFi.reconnect();
         sendInitialMessage();
         delay(1000);
-        if(macSent)
-        {
+        if (macSent) {
           setRGBColor(255, 255, 0);
           WiFi.mode(WIFI_OFF);
           measureSequence();
@@ -330,23 +289,19 @@ void loop()
           setRGBColor(255, 0, 255);
           deepSleepTime = 30000;
         }
-      }
-      else
-      {
+      } else {
         setRGBColorSequence(0, 255, 255, 4);
         deepSleepTime = 10000;
       }
     }
   }
 
-  if(deepSleepTime != 0)
-  {
+  if (deepSleepTime != 0) {
     deepSleep = true;
     sendDeepSleep(deepSleepTime);
   }
 
-  if(timeSinceLastFailure != 0 && millis() - timeSinceLastFailure >= 60000)
-  {
+  if (timeSinceLastFailure != 0 && millis() - timeSinceLastFailure >= 60000) {
     Serial.println(failCounter);
     failCounter = 0;
     deepSleepTime = 10000;
