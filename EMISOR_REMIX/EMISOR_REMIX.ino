@@ -2,23 +2,29 @@
 #include <WiFi.h>
 #include <Adafruit_MAX31856.h>
 #include <ESP32Ping.h>
+#include <EEPROM.h>
+
+#define EEPROM_SIZE 6
 
 #define PIN_ANALOGICO 2
 #define VOLTAJE_MAX 3.3
 #define VOLTAJE_MIN 0.0
 #define VOLTAJE_BATERIA_MAX 6.5
-#define VOLTAJE_BATERIA_MIN 3.5
+#define VOLTAJE_BATERIA_MIN 3.9
 #define DIVISOR_RESISTENCIA 1.97
 
 int CS_variable = 10, MOSI_variable = 3, SO_variable = 5, CLK_variable = 4;
 Adafruit_MAX31856 termocupla = Adafruit_MAX31856(CS_variable, MOSI_variable, SO_variable, CLK_variable);
 
-const uint8_t esp2Address[] = {0x08, 0xD1, 0xF9, 0xDC, 0xDC, 0xBC };
+RTC_DATA_ATTR uint8_t esp2Address[6];// = {0x08, 0xD1, 0xF9, 0xDC, 0xDC, 0xBC };
+
+// RTC_DATA_ATTR uint8_t esp2Address[] = {0xD4, 0x8A, 0xFC, 0xCE, 0xF3, 0xAC };
+
 constexpr int buttonPin = 19, ledR = 0, ledG = 1, ledB = 18, numMeasurements = 10;
 
 bool macSent, buttonPressed, sequenceInProgress, bouncePress, stableTemperature, deepSleep;
 
-int failCounter, timeSinceLastFailure, sequenceCountdown, initialNumber;
+int failCounter, timeSinceLastFailure, sequenceCountdown, initialNumber, bounceCountdown;
 int lastButtonPressTime, buttonPressCounter, currentIndex, sendTime, deepSleepTime;
 
 float temperatureReadings[numMeasurements];
@@ -43,42 +49,46 @@ void initializeVariables() {
   averageTemperature = 0;
 
   memset(temperatureReadings, 0, sizeof(temperatureReadings));
+
+  EEPROM.begin(EEPROM_SIZE);
 }
 
 int tempWIFIOFF = 0;
 int tempWIFION = 0;
 
 void setup() {
-  initializeVariables();
+    initializeVariables();
 
-  //esp_wake_deep_sleep();
-  esp_deep_sleep_enable_gpio_wakeup((gpio_num_t)buttonPin, ESP_GPIO_WAKEUP_GPIO_LOW);
-  Serial.begin(115200);
-  termocupla.begin();
-  analogReadResolution(12);
+    //esp_wake_deep_sleep();
+    esp_deep_sleep_enable_gpio_wakeup((gpio_num_t)buttonPin, ESP_GPIO_WAKEUP_GPIO_LOW);
+    Serial.begin(115200);
+    termocupla.begin();
+    analogReadResolution(12);
 
-  WiFi.mode(WIFI_STA);
+    WiFi.mode(WIFI_STA);
 
-  pinMode(ledR, OUTPUT);
-  pinMode(ledG, OUTPUT);
-  pinMode(ledB, OUTPUT);
-  pinMode(buttonPin, INPUT);
+    pinMode(ledR, OUTPUT);
+    pinMode(ledG, OUTPUT);
+    pinMode(ledB, OUTPUT);
+    pinMode(buttonPin, INPUT);
 
-  setRGBColorSequence(255, 0, 255, 4);
+    setRGBColorSequence(255, 0, 255, 4);
 
-  Serial.println("Conectado.");
+    Serial.println("Conectado.");
 
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("Error al inicializar ESP-NOW");
-    return;
-  }
-  wl_status_t wifiStatus = WiFi.status();
+    if (esp_now_init() != ESP_OK) {
+        Serial.println("Error al inicializar ESP-NOW");
+        deepSleepTime = 30000;
+        deepSleep = true;
+        return;
+    }
+    wl_status_t wifiStatus = WiFi.status();
 
-  checkConnection();
-  //WiFi.disconnect();
-  WiFi.mode(WIFI_OFF);
+    checkConnection();
+    //WiFi.disconnect();
+    //WiFi.mode(WIFI_OFF);
 
-  termocupla.setThermocoupleType(MAX31856_TCTYPE_K);
+    termocupla.setThermocoupleType(MAX31856_TCTYPE_K);
 }
 
 void setRGBColor(int red, int green, int blue) {
@@ -113,7 +123,7 @@ float calculateBattery(bool V) {
 }
 
 bool automaticBatteryCheck() {
-  return true;  //calculateBattery(false) >= 3.5;
+  return calculateBattery(false) >= 3.5;
 }
 
 void manualBatteryCheck() {
@@ -128,20 +138,23 @@ void manualBatteryCheck() {
   setRGBColorSequence((int)red, (int)green, 255, 4);
 }
 
+bool checkConnection() {
+    esp_now_register_send_cb(onSent);
+    esp_now_register_recv_cb(onReceive);
 
-void checkConnection() {
-  esp_now_register_send_cb(onSent);
-  esp_now_register_recv_cb(onReceive);
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, esp2Address, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
 
-  esp_now_peer_info_t peerInfo = {};
-  memcpy(peerInfo.peer_addr, esp2Address, 6);
-  peerInfo.channel = 0;
-  peerInfo.encrypt = false;
+    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+      Serial.println("No se pudo agregar el peer");
+      setRGBColor(0, 0, 255);
+      delay(15000);
+      return false;
+    }
 
-  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-    Serial.println("No se pudo agregar el peer");
-    return;
-  }
+    return true;
 }
 
 void onSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
@@ -161,7 +174,7 @@ void onSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 
     if (!macSent) {
       Serial.println("Error en el mensaje inicial, secuencia terminada.");
-      deepSleepTime = 1000;
+      deepSleepTime = 10000;
     }
   }
 }
@@ -171,6 +184,20 @@ void onReceive(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
     memcpy(&initialNumber, data, sizeof(initialNumber));
     Serial.print("Número inicial recibido: ");
     Serial.println(initialNumber);
+  }
+  else
+  {
+    for(int i = 0; i < 6; i++)
+    {
+        esp2Address[i] = (uint8_t)data[i];
+        EEPROM.write(i, (uint8_t)data[i]);
+    }
+
+    EEPROM.commit();
+
+    Serial.println("Mac actualizada");
+
+    setRGBColorSequence(255, 255, 0, 5);
   }
 }
 
@@ -229,11 +256,13 @@ void measureSequence() {
 }
 
 void sendDeepSleep(int delayTime) {
+  deepSleep = true;
   Serial.printf("Durmiendo en %d.\n", delayTime);
   WiFi.mode(WIFI_OFF);
   delay(delayTime);
   setRGBColor(255, 255, 255);
   delay(500);
+  //esp_sleep_enable_timer_wakeup(300 * 1000000);
   esp_deep_sleep_start();
 }
 
@@ -248,14 +277,16 @@ void loop() {
         sequenceCountdown = millis();
         buttonPressed = true;
       }
-
-      sequenceInProgress = (buttonPressed && sequenceCountdown != 0 && millis() - sequenceCountdown >= 3000) ? true : false;
-
-      buttonPressCounter = bouncePress ? buttonPressCounter + 1 : buttonPressCounter;
-      bouncePress = false;
+      sequenceInProgress = (buttonPressed && sequenceCountdown != 0 && millis() - sequenceCountdown >= 3000) ? true : false;    
     }
+
+    bounceCountdown = millis();
+
+    buttonPressCounter = bouncePress ? buttonPressCounter + 1 : buttonPressCounter;
+    bouncePress = false;
+
   } else {
-    bouncePress = (millis() - sequenceCountdown >= 500) ? true : false;
+    bouncePress = (millis() - bounceCountdown >= 500) ? true : false;
     buttonPressed = false;
   }
 
@@ -265,14 +296,29 @@ void loop() {
     manualBatteryCheck();
   }
 
-  if (millis() - sequenceCountdown >= 3000) {
-    buttonPressCounter = 0;
-    sequenceCountdown = 0;
-    if (sequenceInProgress) {
-      if (automaticBatteryCheck()) {
-        WiFi.mode(WIFI_STA);
-        esp_now_init();
-        checkConnection();
+  buttonPressCounter = (millis() - bounceCountdown >= 3000) ? 0 : buttonPressCounter;
+
+  if (deepSleepTime != 0) {
+    sendDeepSleep(deepSleepTime);
+  }
+
+  if (timeSinceLastFailure != 0 && millis() - timeSinceLastFailure >= 60000) {
+    Serial.println(failCounter);
+    failCounter = 0;
+    deepSleepTime = 10000;
+  }
+
+  if (sequenceInProgress) {
+    if (automaticBatteryCheck()) {
+      WiFi.mode(WIFI_STA);
+      esp_now_init();
+
+      for(int i = 0; i < 6; i++)
+      {
+        esp2Address[i] = EEPROM.read(i); 
+      }
+
+      if (checkConnection()) {
         WiFi.reconnect();
         sendInitialMessage();
         delay(1000);
@@ -282,28 +328,21 @@ void loop() {
           measureSequence();
           WiFi.mode(WIFI_STA);
           esp_now_init();
-          checkConnection();
-          WiFi.reconnect();
-          sendTemperatureAndInitial();
-          WiFi.mode(WIFI_OFF);
-          setRGBColor(255, 0, 255);
-          deepSleepTime = 30000;
+          if (checkConnection())
+          {
+            WiFi.reconnect();
+            sendTemperatureAndInitial();
+            WiFi.mode(WIFI_OFF);
+            setRGBColor(255, 0, 255);
+          }
         }
-      } else {
-        setRGBColorSequence(0, 255, 255, 4);
-        deepSleepTime = 10000;
-      }
+      } 
+      deepSleepTime = 30000;
+    } else {
+      setRGBColorSequence(0, 255, 255, 10);
+      deepSleepTime = 10000;
     }
   }
 
-  if (deepSleepTime != 0) {
-    deepSleep = true;
-    sendDeepSleep(deepSleepTime);
-  }
-
-  if (timeSinceLastFailure != 0 && millis() - timeSinceLastFailure >= 60000) {
-    Serial.println(failCounter);
-    failCounter = 0;
-    deepSleepTime = 10000;
-  }
+  //(deepSleepTime != 0) ? sendDeepSleep(deepSleepTime) : "";
 }

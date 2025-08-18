@@ -14,7 +14,11 @@ const uint8_t allowedMacs[][6] = {
     {0x3C, 0x8A, 0x1F, 0x30, 0x95, 0x98},  // MAC de LP5912 1
     {0x3C, 0x8A, 0x1F, 0x1E, 0x58, 0x4C},  // MAC de HT7833 2
     {0x3C, 0x8A, 0x1F, 0x30, 0x89, 0xB0},
+    {0x34, 0xCD, 0xB0, 0x8C, 0xF7, 0xF4},
+    {0x34, 0xCD, 0xB0, 0x8C, 0xF7, 0xE4},
 };
+
+uint8_t macAddress[6];
 
 int row;
 int column;
@@ -26,8 +30,8 @@ typedef struct response_message {
 } response_message;
 
 void onSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
-    //Serial.print("Mensaje enviado a ESP1: ");
-    //Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Éxito" : "Fallo");
+    Serial.print("Mensaje enviado a ESP1: ");
+    Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Éxito" : "Fallo");
 }
 
 bool isAllowedMac(const uint8_t *mac_addr) {
@@ -79,6 +83,14 @@ void onReceive(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
     }
 }
 
+void getMac()
+{
+    String mac = WiFi.macAddress();
+    
+    sscanf(mac.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+    &macAddress[0], &macAddress[1], &macAddress[2], &macAddress[3], &macAddress[4], &macAddress[5]);
+}
+
 void setup() {
     Serial.begin(115200);
 
@@ -87,7 +99,6 @@ void setup() {
         Serial.println("Error al inicializar ESP-NOW");
         return;
     }
-
 
     // Agrega cada MAC de la lista como peer
     for (int i = 0; i < numAllowedMacs; i++) {
@@ -99,6 +110,8 @@ void setup() {
             Serial.println("No se pudo agregar el peer de ESP1");
         }
     }
+
+    getMac();
 }
 
 void loop() {
@@ -110,5 +123,14 @@ void loop() {
       esp_now_register_recv_cb(onReceive);
 
       Serial.println("OK");
+    }
+
+    if(type == 'R')
+    {
+      for(int i = 0; i < numAllowedMacs; i++)
+      {
+        esp_now_send(allowedMacs[i], (uint8_t *)macAddress, sizeof(macAddress));
+        delay(100);
+      }
     }
 }
