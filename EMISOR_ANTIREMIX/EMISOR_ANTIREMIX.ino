@@ -2,30 +2,35 @@
 #include <WiFi.h>
 #include <max6675.h>
 #include <ESP32Ping.h>
+#include <EEPROM.h>
+
+#define EEPROM_SIZE 6
 
 #define PIN_ANALOGICO 34
 #define VOLTAJE_MAX 3.3
 #define VOLTAJE_MIN 0.0
 #define VOLTAJE_BATERIA_MAX 6.5
-#define VOLTAJE_BATERIA_MIN 3.5
+#define VOLTAJE_BATERIA_MIN 3.9
 #define DIVISOR_RESISTENCIA 1.97
 
 int SO = 14, CS = 15, CSK = 12;
 MAX6675 termocupla(CSK, CS, SO);
 
-const uint8_t esp2Address[] = {0x08, 0xD1, 0xF9, 0xDC, 0xDC, 0xBC};
-constexpr int buttonPin = 2, ledR = 23, ledG = 21, ledB = 22, numMeasurements = 10;
+RTC_DATA_ATTR uint8_t esp2Address[6];// = {0x08, 0xD1, 0xF9, 0xDC, 0xDC, 0xBC };
+
+// RTC_DATA_ATTR uint8_t esp2Address[] = {0xD4, 0x8A, 0xFC, 0xCE, 0xF3, 0xAC };
+
+constexpr int buttonPin = 2, ledR = 23, ledG = 22, ledB = 21, numMeasurements = 10;
 
 bool macSent, buttonPressed, sequenceInProgress, bouncePress, stableTemperature, deepSleep;
 
-int failCounter, timeSinceLastFailure, sequenceCountdown, initialNumber;
+int failCounter, timeSinceLastFailure, sequenceCountdown, initialNumber, bounceCountdown;
 int lastButtonPressTime, buttonPressCounter, currentIndex, sendTime, deepSleepTime;
 
 float temperatureReadings[numMeasurements];
 float currentTemperature, averageTemperature;
 
-void initializeVariables()
-{
+void initializeVariables() {
   buttonPressed = false;
   deepSleep = true;
   macSent = false;
@@ -44,13 +49,14 @@ void initializeVariables()
   averageTemperature = 0;
 
   memset(temperatureReadings, 0, sizeof(temperatureReadings));
+
+  EEPROM.begin(EEPROM_SIZE);
 }
 
 int tempWIFIOFF = 0;
 int tempWIFION = 0;
 
-void setup()
-{
+void setup() {
   initializeVariables();
   
   esp_sleep_enable_ext0_wakeup((gpio_num_t)buttonPin, 1);
@@ -68,29 +74,26 @@ void setup()
 
   Serial.println("Conectado.");
 
-  if (esp_now_init() != ESP_OK) 
-  {
-    Serial.println("Error al inicializar ESP-NOW");
-    return;
+  if (esp_now_init() != ESP_OK) {
+      Serial.println("Error al inicializar ESP-NOW");
+      deepSleepTime = 30000;
+      deepSleep = true;
+      return;
   }
   wl_status_t wifiStatus = WiFi.status();
 
   checkConnection();
   //WiFi.disconnect();
-  WiFi.mode(WIFI_OFF);
 }
 
-void setRGBColor(int red, int green, int blue) 
-{
+void setRGBColor(int red, int green, int blue) {
   analogWrite(ledR, red);
   analogWrite(ledG, green);
   analogWrite(ledB, blue);
 }
 
-void setRGBColorSequence(int red, int green, int blue, int repetitions) 
-{
-  for(int i = 0; i < repetitions; i++)
-  {
+void setRGBColorSequence(int red, int green, int blue, int repetitions) {
+  for (int i = 0; i < repetitions; i++) {
     setRGBColor(red, green, blue);
     delay(500);
     setRGBColor(255, 255, 255);
@@ -135,21 +138,24 @@ void manualBatteryCheck()
 }
 
 
-void checkConnection()
+bool checkConnection()
 {
   esp_now_register_send_cb(onSent);
-  esp_now_register_recv_cb(onReceive);
+    esp_now_register_recv_cb(onReceive);
 
   esp_now_peer_info_t peerInfo = {};
   memcpy(peerInfo.peer_addr, esp2Address, 6);
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
-  
-  if (esp_now_add_peer(&peerInfo) != ESP_OK) 
-  {
+
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
     Serial.println("No se pudo agregar el peer");
-    return;
+    setRGBColor(0, 0, 255);
+    delay(15000);
+    return false;
   }
+
+  return true;
 }
 
 void onSent(const uint8_t *mac_addr, esp_now_send_status_t status)
@@ -201,25 +207,22 @@ void sendTemperatureAndInitial()
 {
   sendTime = millis();
   //currentTemperature = a;  // Mide la temperatura usando el sensor MAX6675
-  float dataToSend[2] = {averageTemperature, (float)initialNumber};
-  
-  while (macSent)
-  {
+  float dataToSend[2] = { averageTemperature, (float)initialNumber };
+
+  while (macSent) {
     esp_now_send(esp2Address, (uint8_t *)dataToSend, sizeof(dataToSend));
     Serial.printf("Intentando enviar temperatura: %.2f y número inicial: %d\n", averageTemperature, initialNumber);
     delay(4000);
   }
 }
 
-bool checkTemperatureStability() 
-{
+bool checkTemperatureStability() {
   float maxTemp = temperatureReadings[0];
   float minTemp = temperatureReadings[0];
 
   averageTemperature = 0;
 
-  for (int i = 0; i < numMeasurements; i++) 
-  {
+  for (int i = 0; i < numMeasurements; i++) {
     maxTemp = (temperatureReadings[i] > maxTemp) ? temperatureReadings[i] : maxTemp;
     minTemp = (temperatureReadings[i] < minTemp) ? temperatureReadings[i] : minTemp;
     averageTemperature += temperatureReadings[i];
@@ -230,122 +233,113 @@ bool checkTemperatureStability()
   return (maxTemp - minTemp) <= 0.5;
 }
 
-void measureSequence()
-{
-  while(!stableTemperature)
-  {
+void measureSequence() {
+  while (!stableTemperature) {
     currentTemperature = getThermocoupleMeasure();
     temperatureReadings[currentIndex] = currentTemperature;
     Serial.println(currentTemperature);
     currentIndex = (currentIndex + 1) % numMeasurements;
     stableTemperature = checkTemperatureStability();
-    delay(1000); 
+    delay(1000);
   }
 
   Serial.println("Temperatura estable, se enviarán los datos:");
 
-  for (int i = 0; i < numMeasurements; i++) 
-  {
+  for (int i = 0; i < numMeasurements; i++) {
     Serial.print(temperatureReadings[i]);
     Serial.print(" ");
   }
   Serial.println();
 }
 
-void sendDeepSleep(int delayTime)
-{
+void sendDeepSleep(int delayTime) {
+  deepSleep = true;
   Serial.printf("Durmiendo en %d.\n", delayTime);
   WiFi.mode(WIFI_OFF);
   delay(delayTime);
   setRGBColor(255, 255, 255);
   delay(500);
+  //esp_sleep_enable_timer_wakeup(300 * 1000000);
   esp_deep_sleep_start();
 }
 
-void loop()
-{
+void loop() {
 
-  if(digitalRead(buttonPin) == HIGH)
-  {
-    if(deepSleep)
-    {
+  if (digitalRead(buttonPin) == HIGH) {
+    if (deepSleep) {
       esp_sleep_enable_ext0_wakeup((gpio_num_t)buttonPin, 1);
       deepSleep = false;
-    }
-    else
-    {
-      if(!buttonPressed)
-      {
+    } else {
+      if (!buttonPressed) {
         sequenceCountdown = millis();
         buttonPressed = true;
       }
-
-      sequenceInProgress = (buttonPressed && sequenceCountdown != 0 && millis() - sequenceCountdown >= 3000) ? true : false;
-
-      buttonPressCounter = bouncePress ? buttonPressCounter + 1 : buttonPressCounter;
-      bouncePress = false;
+      sequenceInProgress = (buttonPressed && sequenceCountdown != 0 && millis() - sequenceCountdown >= 3000) ? true : false;    
     }
-  }
-  else
-  {
-    bouncePress = (millis() - sequenceCountdown >= 500) ? true : false;
+
+    bounceCountdown = millis();
+
+    buttonPressCounter = bouncePress ? buttonPressCounter + 1 : buttonPressCounter;
+    bouncePress = false;
+
+  } else {
+    bouncePress = (millis() - bounceCountdown >= 500) ? true : false;
     buttonPressed = false;
   }
 
-  if(buttonPressCounter >= 3)
-  {
+  if (buttonPressCounter >= 3) {
     buttonPressCounter = 0;
     Serial.println("Checking battery...");
     manualBatteryCheck();
   }
 
-  if(millis() - sequenceCountdown >= 3000)
-  {
-    buttonPressCounter = 0;
-    sequenceCountdown = 0;
-    if(sequenceInProgress)
-    {
-      if(automaticBatteryCheck())
+  buttonPressCounter = (millis() - bounceCountdown >= 3000) ? 0 : buttonPressCounter;
+
+  if (deepSleepTime != 0) {
+    sendDeepSleep(deepSleepTime);
+  }
+
+  if (timeSinceLastFailure != 0 && millis() - timeSinceLastFailure >= 60000) {
+    Serial.println(failCounter);
+    failCounter = 0;
+    deepSleepTime = 10000;
+  }
+
+  if (sequenceInProgress) {
+    if (automaticBatteryCheck()) {
+      WiFi.mode(WIFI_STA);
+      esp_now_init();
+
+      for(int i = 0; i < 6; i++)
       {
-        WiFi.mode(WIFI_STA);
-        esp_now_init();
-        checkConnection();
+        esp2Address[i] = EEPROM.read(i); 
+      }
+
+      if (checkConnection()) {
         WiFi.reconnect();
         sendInitialMessage();
         delay(1000);
-        if(macSent)
-        {
+        if (macSent) {
           setRGBColor(255, 255, 0);
           WiFi.mode(WIFI_OFF);
           measureSequence();
           WiFi.mode(WIFI_STA);
           esp_now_init();
-          checkConnection();
-          WiFi.reconnect();
-          sendTemperatureAndInitial();
-          WiFi.mode(WIFI_OFF);
-          setRGBColor(255, 0, 255);
-          deepSleepTime = 30000;
+          if (checkConnection())
+          {
+            WiFi.reconnect();
+            sendTemperatureAndInitial();
+            WiFi.mode(WIFI_OFF);
+            setRGBColor(255, 0, 255);
+          }
         }
-      }
-      else
-      {
-        setRGBColorSequence(0, 255, 255, 4);
-        deepSleepTime = 10000;
-      }
+      } 
+      deepSleepTime = 30000;
+    } else {
+      setRGBColorSequence(0, 255, 255, 10);
+      deepSleepTime = 10000;
     }
   }
 
-  if(deepSleepTime != 0)
-  {
-    deepSleep = true;
-    sendDeepSleep(deepSleepTime);
-  }
-
-  if(timeSinceLastFailure != 0 && millis() - timeSinceLastFailure >= 60000)
-  {
-    Serial.println(failCounter);
-    failCounter = 0;
-    deepSleepTime = 10000;
-  }
+  //(deepSleepTime != 0) ? sendDeepSleep(deepSleepTime) : "";
 }
