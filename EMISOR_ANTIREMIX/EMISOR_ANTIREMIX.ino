@@ -121,7 +121,7 @@ float calculateBattery(bool V)
 
 bool automaticBatteryCheck()
 {
-  return true;//calculateBattery(false) >= 3.5;
+  return calculateBattery(false) >= 3.5;
 }
 
 void manualBatteryCheck()
@@ -141,7 +141,7 @@ void manualBatteryCheck()
 bool checkConnection()
 {
   esp_now_register_send_cb(onSent);
-    esp_now_register_recv_cb(onReceive);
+  esp_now_register_recv_cb(onReceive);
 
   esp_now_peer_info_t peerInfo = {};
   memcpy(peerInfo.peer_addr, esp2Address, 6);
@@ -158,41 +158,47 @@ bool checkConnection()
   return true;
 }
 
-void onSent(const uint8_t *mac_addr, esp_now_send_status_t status)
-{
-  if(status == ESP_NOW_SEND_SUCCESS) 
-  {
+void onSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  if (status == ESP_NOW_SEND_SUCCESS) {
     macSent = !macSent;
     Serial.println("Mensaje enviado con éxito");
-    
-    if(!macSent)
-    {
+
+    if (!macSent) {
       Serial.println("Secuencia completada, deteniendo reintentos.");
     }
-  }
-  else 
-  {
+  } else {
     failCounter += 1;
     timeSinceLastFailure = millis();
-    
+
     Serial.println("Error al enviar mensaje");
     setRGBColor(0, 0, 255);
-    
-    if (!macSent) 
-    {
+
+    if (!macSent) {
       Serial.println("Error en el mensaje inicial, secuencia terminada.");
-      deepSleepTime = 1000;
+      deepSleepTime = 10000;
     }
   }
 }
 
-void onReceive(const uint8_t *mac_addr, const uint8_t *data, int data_len) 
-{   
-  if (data_len == sizeof(int)) 
-  {
+void onReceive(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
+  if (data_len == sizeof(int)) {
     memcpy(&initialNumber, data, sizeof(initialNumber));
     Serial.print("Número inicial recibido: ");
     Serial.println(initialNumber);
+  }
+  else
+  {
+    for(int i = 0; i < 6; i++)
+    {
+        esp2Address[i] = (uint8_t)data[i];
+        EEPROM.write(i, (uint8_t)data[i]);
+    }
+
+    EEPROM.commit();
+
+    Serial.println("Mac actualizada");
+
+    setRGBColorSequence(255, 255, 0, 5);
   }
 }
 
