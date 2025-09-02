@@ -54,22 +54,22 @@ void parseSerialCommand(String input) {
   input.trim();
 
   // Debe tener al menos 4 chars: X$Y$
-  if (input.length() < 4 || input.charAt(1) != '$' || input.charAt(3) != '$') {
-    return;
-  }
 
-  char t0 = input.charAt(0);
-  char t1 = input.charAt(2);
-  
-  if (t0 == 'R') {
+  if (input == 'R') {
     for(int i = 0; i < numAllowedMacs; i++)
       {
         esp_now_send(allowedMacs[i], (uint8_t *)macAddress, sizeof(macAddress));
         delay(500);
       }
   }
-  
-  if ((t0 == 'E' || t0 == 'C') && (t1 == 'I' || t1 == 'D')) {
+  else {
+    if (input.length() < 4 || input.charAt(1) != '$' || input.charAt(3) != '$') {
+      return;
+    }
+    char t0 = input.charAt(0);
+    char t1 = input.charAt(2);
+
+    if ((t0 == 'E' || t0 == 'C') && (t1 == 'I' || t1 == 'D')) {
     modeType = t0;
     directionType = t1;
     expectedColumns = (modeType == 'E') ? 2 : 3;
@@ -100,7 +100,9 @@ void parseSerialCommand(String input) {
     }
 
     Serial.println("OK");
+    }
   }
+  
 }
 
 void onReceive(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
