@@ -76,7 +76,7 @@ void parseSerialCommand(String input) {
 
     // inicializa initialNumber según I o D
     if (directionType == 'I') {
-      initialNumber = 50;
+      initialNumber = (modeType == 'E') ? 49 : 59;
     } else {
       initialNumber = 0;
     }
@@ -113,20 +113,39 @@ void onReceive(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
 
   if (data_len == 1 && data[0] == 0xFF) {
     // Ajusta initialNumber según direccion
+    // === INICIO: límites según modo ===
+    int maxN = (modeType == 'E') ? 49 : 59;
+    // === FIN: límites según modo ===
+
     while (true) {
-      int grupo = (expectedColumns == 2)
-                  ? ((directionType=='I' ? (initialNumber - 1) : initialNumber) / expectedColumns) + 1
-                  : ((directionType=='I' ? (initialNumber - 1) : initialNumber) / expectedColumns) + 1;
+      int adjusted = (directionType=='I' ? (initialNumber - 1) : initialNumber);
+      int grupo = (adjusted / expectedColumns) + 1;
+
+      // Respeta límites antes de seguir moviendo por "skip"
+      if (initialNumber < 0) { initialNumber = 0; break; }
+      if (initialNumber > maxN) { initialNumber = maxN; break; }
+
       if (!shouldSkip(grupo)) break;
-      if (directionType == 'I') initialNumber--;
-      else initialNumber++;
+
+      if (directionType == 'I') {
+        if (initialNumber > 0) initialNumber--;
+        else break; // llegó a 0
+      } else {
+        if (initialNumber < maxN) initialNumber++;
+        else break; // llegó a max
+      }
     }
 
     response_message sendData = { initialNumber };
     esp_now_send(mac_addr, (uint8_t *)&sendData, sizeof(sendData));
 
-    if (directionType == 'I') initialNumber--;
-    else initialNumber++;
+    // === INICIO: incrementar/decrementar respetando límites ===
+    if (directionType == 'I') {
+      if (initialNumber > 0) initialNumber--;    // 49..0
+    } else {
+      if (initialNumber < maxN) initialNumber++; // 0..49 ó 0..59
+    }
+    // === FIN: incrementar/decrementar respetando límites ===
 
   } else if (data_len == sizeof(float)*2) {
     float numbersReceived[2];
