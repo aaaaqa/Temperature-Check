@@ -1,26 +1,26 @@
 #include <esp_now.h>
 #include <WiFi.h>
-#include <max6675.h>
+#include <Adafruit_MAX31856.h>
 #include <ESP32Ping.h>
 #include <EEPROM.h>
 
 #define EEPROM_SIZE 6
 
-#define PIN_ANALOGICO 34
+#define PIN_ANALOGICO 2
 #define VOLTAJE_MAX 3.3
 #define VOLTAJE_MIN 0.0
 #define VOLTAJE_BATERIA_MAX 6.5
 #define VOLTAJE_BATERIA_MIN 3.9
 #define DIVISOR_RESISTENCIA 1.97
 
-int SO = 14, CS = 15, CSK = 12;
-MAX6675 termocupla(CSK, CS, SO);
+int CS_variable = 10, MOSI_variable = 3, SO_variable = 5, CLK_variable = 4;
+Adafruit_MAX31856 termocupla = Adafruit_MAX31856(CS_variable, MOSI_variable, SO_variable, CLK_variable);
 
 RTC_DATA_ATTR uint8_t esp2Address[6];// = {0x08, 0xD1, 0xF9, 0xDC, 0xDC, 0xBC };
 
 // RTC_DATA_ATTR uint8_t esp2Address[] = {0xD4, 0x8A, 0xFC, 0xCE, 0xF3, 0xAC };
 
-constexpr int buttonPin = 2, ledR = 23, ledG = 22, ledB = 21, numMeasurements = 10;
+constexpr int buttonPin = 19, ledR = 0, ledG = 1, ledB = 18, numMeasurements = 10;
 
 bool macSent, buttonPressed, sequenceInProgress, bouncePress, stableTemperature, deepSleep;
 
@@ -57,33 +57,38 @@ int tempWIFIOFF = 0;
 int tempWIFION = 0;
 
 void setup() {
-  initializeVariables();
-  
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)buttonPin, 1);
-  Serial.begin(115200);
-  analogReadResolution(12);
+    initializeVariables();
 
-  WiFi.mode(WIFI_STA);
+    //esp_wake_deep_sleep();
+    esp_deep_sleep_enable_gpio_wakeup((gpio_num_t)buttonPin, ESP_GPIO_WAKEUP_GPIO_LOW);
+    Serial.begin(115200);
+    termocupla.begin();
+    analogReadResolution(12);
 
-  pinMode(ledR, OUTPUT);
-  pinMode(ledG, OUTPUT);
-  pinMode(ledB, OUTPUT);
-  pinMode(buttonPin, INPUT);
+    WiFi.mode(WIFI_STA);
 
-  setRGBColorSequence(255, 0, 255, 4);
+    pinMode(ledR, OUTPUT);
+    pinMode(ledG, OUTPUT);
+    pinMode(ledB, OUTPUT);
+    pinMode(buttonPin, INPUT);
 
-  Serial.println("Conectado.");
+    setRGBColorSequence(255, 0, 255, 4);
 
-  if (esp_now_init() != ESP_OK) {
-      Serial.println("Error al inicializar ESP-NOW");
-      deepSleepTime = 30000;
-      deepSleep = true;
-      return;
-  }
-  wl_status_t wifiStatus = WiFi.status();
+    Serial.println("Conectado.");
 
-  checkConnection();
-  //WiFi.disconnect();
+    if (esp_now_init() != ESP_OK) {
+        Serial.println("Error al inicializar ESP-NOW");
+        deepSleepTime = 30000;
+        deepSleep = true;
+        return;
+    }
+    wl_status_t wifiStatus = WiFi.status();
+
+    checkConnection();
+    //WiFi.disconnect();
+    //WiFi.mode(WIFI_OFF);
+
+    termocupla.setThermocoupleType(MAX31856_TCTYPE_K);
 }
 
 void setRGBColor(int red, int green, int blue) {
@@ -101,61 +106,55 @@ void setRGBColorSequence(int red, int green, int blue, int repetitions) {
   }
 }
 
-float getThermocoupleMeasure() 
-{
-  return termocupla.readCelsius();
+float getThermocoupleMeasure() {
+  return termocupla.readThermocoupleTemperature();
 }
 
-float calculateBattery(bool V)
-{
+float calculateBattery(bool V) {
   int lecturaADC = analogRead(PIN_ANALOGICO);
   float voltajePin = (lecturaADC / 4095.0) * VOLTAJE_MAX;
   float voltajeBateria = voltajePin * DIVISOR_RESISTENCIA;
   float porcentaje = ((voltajeBateria - VOLTAJE_BATERIA_MIN) / (VOLTAJE_BATERIA_MAX - VOLTAJE_BATERIA_MIN)) * 100.0;
   porcentaje = constrain(porcentaje, 0, 100);
-  
+
   float result = V ? porcentaje : voltajeBateria;
 
   return result;
 }
 
-bool automaticBatteryCheck()
-{
+bool automaticBatteryCheck() {
   return calculateBattery(false) >= 3.5;
 }
 
-void manualBatteryCheck()
-{
+void manualBatteryCheck() {
   float porcentaje = calculateBattery(true);
 
-  int red = (porcentaje <= 20.0) ? 0 : int(porcentaje * 255 / 100);
-  int green = 255 - red;
+  float red = (porcentaje <= 20.0) ? 0 : int(porcentaje * 255 / 100);
+  float green = 255.0 - red;
 
   Serial.printf("Bateria actual: %.2f %\n", porcentaje);
   Serial.printf("Red: %.2f, Green: %.2f\n", red, green);
 
-  setRGBColorSequence(red, green, 255, 4);
+  setRGBColorSequence((int)red, (int)green, 255, 4);
 }
 
+bool checkConnection() {
+    esp_now_register_send_cb(onSent);
+    esp_now_register_recv_cb(onReceive);
 
-bool checkConnection()
-{
-  esp_now_register_send_cb(onSent);
-  esp_now_register_recv_cb(onReceive);
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, esp2Address, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
 
-  esp_now_peer_info_t peerInfo = {};
-  memcpy(peerInfo.peer_addr, esp2Address, 6);
-  peerInfo.channel = 0;
-  peerInfo.encrypt = false;
+    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+      Serial.println("No se pudo agregar el peer");
+      setRGBColor(0, 0, 255);
+      delay(15000);
+      return false;
+    }
 
-  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-    Serial.println("No se pudo agregar el peer");
-    setRGBColor(0, 0, 255);
-    delay(15000);
-    return false;
-  }
-
-  return true;
+    return true;
 }
 
 void onSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
@@ -202,15 +201,13 @@ void onReceive(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
   }
 }
 
-void sendInitialMessage() 
-{
-    uint8_t initialMessage[1] = {0xFF};
-    esp_now_send(esp2Address, initialMessage, sizeof(initialMessage));
-    Serial.println("Mensaje inicial enviado.");
+void sendInitialMessage() {
+  uint8_t initialMessage[1] = { 0xFF };
+  esp_now_send(esp2Address, initialMessage, sizeof(initialMessage));
+  Serial.println("Mensaje inicial enviado.");
 }
 
-void sendTemperatureAndInitial() 
-{
+void sendTemperatureAndInitial() {
   sendTime = millis();
   //currentTemperature = a;  // Mide la temperatura usando el sensor MAX6675
   float dataToSend[2] = { averageTemperature, (float)initialNumber };
@@ -276,7 +273,7 @@ void loop() {
 
   if (digitalRead(buttonPin) == HIGH || test) {
     if (deepSleep) {
-      esp_sleep_enable_ext0_wakeup((gpio_num_t)buttonPin, 1);
+      esp_deep_sleep_enable_gpio_wakeup((gpio_num_t)buttonPin, ESP_GPIO_WAKEUP_GPIO_LOW);
       deepSleep = false;
     } else {
       if (!buttonPressed) {
