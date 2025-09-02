@@ -55,7 +55,7 @@ void parseSerialCommand(String input) {
 
   // Debe tener al menos 4 chars: X$Y$
 
-  if (input == 'R') {
+  if (input == "R") {
     for(int i = 0; i < numAllowedMacs; i++)
       {
         esp_now_send(allowedMacs[i], (uint8_t *)macAddress, sizeof(macAddress));
