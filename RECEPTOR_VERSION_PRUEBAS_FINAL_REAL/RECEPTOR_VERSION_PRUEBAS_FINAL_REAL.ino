@@ -140,7 +140,10 @@ void onReceive(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
   }
 }
 
-void onSent(const uint8_t *mac_addr, esp_now_send_status_t status) {}
+void onSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  Serial.print("Mensaje enviado a ESP1: ");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Éxito" : "Fallo");
+}
 
 void setup() {
   Serial.begin(115200);
