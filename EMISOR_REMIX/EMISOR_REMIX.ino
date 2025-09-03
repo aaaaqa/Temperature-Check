@@ -298,10 +298,6 @@ void loop() {
 
   buttonPressCounter = (millis() - bounceCountdown >= 3000) ? 0 : buttonPressCounter;
 
-  if (deepSleepTime != 0) {
-    sendDeepSleep(deepSleepTime);
-  }
-
   if (timeSinceLastFailure != 0 && millis() - timeSinceLastFailure >= 60000) {
     Serial.println(failCounter);
     failCounter = 0;
@@ -342,6 +338,10 @@ void loop() {
       setRGBColorSequence(0, 255, 255, 10);
       deepSleepTime = 10000;
     }
+  }
+
+  if (deepSleepTime != 0) {
+    sendDeepSleep(deepSleepTime);
   }
 
   //(deepSleepTime != 0) ? sendDeepSleep(deepSleepTime) : "";
